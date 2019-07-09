@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 
+	"io.bytenix.com/jiracsv/analysis"
 	"io.bytenix.com/jiracsv/jira"
 )
 
@@ -24,24 +25,8 @@ func init() {
 
 func writeIssues(w *csv.Writer, component *string, issues []*jira.Issue) {
 	for _, i := range issues {
-		stories := i.LinkedIssues.FilterByFunction(func(i *jira.Issue) bool {
-			if i.Fields.Status != nil && jira.IssueStatus(i.Fields.Status.Name) == jira.IssueStatusObsolete {
-				return false
-			}
-			return true
-		})
-
-		if component != nil {
-			stories = stories.FilterByFunction(func(i *jira.Issue) bool {
-				if i.HasComponent(*component) {
-					return true
-				}
-				return false
-			})
-		}
-
-		storiesProgress := stories.Progress()
-		storyPointsProgress := stories.StoryPointsProgress()
+		a := analysis.NewIssueAnalysis(i, component)
+		r := analysis.NewCheckResult(a)
 
 		w.Write([]string{
 			googleSheetLink(i.Link, i.Key),
@@ -51,9 +36,12 @@ func writeIssues(w *csv.Writer, component *string, issues []*jira.Issue) {
 			i.Fields.Status.Name,
 			i.Owner,
 			i.QAContact,
-			googleSheetBallot(i.Approvals.Approved()),
-			googleSheetProgressBar(storiesProgress.Status, storiesProgress.Total),
-			googleSheetStoryPointsBar(storyPointsProgress.Status, storyPointsProgress.Total, storyPointsProgress.Unknown == 0),
+			googleSheetProgressBar(a.IssuesCompletion.Status, a.IssuesCompletion.Total),
+			googleSheetStoryPointsBar(a.PointsCompletion.Status, a.PointsCompletion.Total, a.PointsCompletion.Unknown == 0),
+			googleSheetTime(a.CommentDate),
+			googleSheetBallot(r.Ready),
+			googleSheetCheckStatus(r.Status),
+			googleSheetSortedMessages(r.Messages, ","),
 		})
 	}
 }
@@ -98,12 +86,14 @@ func main() {
 	}
 
 	log.Printf("JQL = %s\n", profile.JQL)
+
 	issues, err := jiraClient.FindEpics(profile.JQL)
-	log.Printf("JQL returned issues: %d", len(issues))
 
 	if err != nil {
 		panic(err)
 	}
+
+	log.Printf("JQL returned issues: %d", len(issues))
 
 	componentIssues.AddIssues(issues)
 
@@ -121,7 +111,7 @@ func main() {
 			continue
 		}
 
-		w.Write([]string{k.Name})
+		w.Write(append([]string{k.Name}, make([]string, 12)...))
 		writeIssues(w, &k.Name, k.Issues)
 
 		w.Flush()
